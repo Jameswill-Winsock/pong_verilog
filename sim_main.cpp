@@ -16,7 +16,7 @@ static uint8_t fb[H][W];
 
 static void tick() {
     top->clk = 0; 
-    top->eval();
+    top->eval(); 
     if (top->vid_we) fb[top->vid_y][top->vid_x] = top->vid_data;   // sample before the edge
     top->clk = 1; 
     top->eval();
