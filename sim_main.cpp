@@ -1,7 +1,8 @@
 // sim_main.cpp - Verilator + SDL3 front end for the Verilog pong.
 //   W/S = left paddle, Up/Down = right paddle, R = reset, Esc = quit
-//   --ai1 / --ai2 : let the computer drive that paddle
-//   --headless N [out.ppm] : run N frames with no window (for testing)
+//   --ai1 / --ai2 : let the Verilog ai_paddle drive that paddle
+//   --level N (0 easy .. 3 insane), or --level1 N / --level2 N per side
+//   --headless N [out.ppm] : run N frames with no window (for simulated monte carlo runs)
 #include <SDL3/SDL.h>
 #include <cstdio>
 #include <cstdlib>
@@ -37,15 +38,6 @@ static void reset() {
     tick();
 }
 
-// very simple computer player: follow the ball with a little delay and simulated sloppiness
-static void ai(bool left, int& up, int& down) {
-    int paddle_c = (left ? top->p1_y : top->p2_y) + 5;
-    int ball_c   = top->ball_y + 1;
-    int d        = ball_c - paddle_c;
-    up = d < -2;
-    down = d > 2;
-}
-
 static uint32_t shade(uint8_t v) { 
     uint32_t g = v * 17; 
     return 0xFF000000u | g << 16 | g << 8 | g; 
@@ -55,11 +47,21 @@ int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     top = new Vtop;
     bool ai1 = false, ai2 = false, headless = false;
-    int  headless_frames = 0; 
+    int level1 = 2, level2 = 2;
+    int headless_frames = 0; 
     const char* out = nullptr;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--ai1")) {
             ai1 = true;
+        }
+        else if (!strcmp(argv[i], "--level") && i + 1 < argc) {
+            level1 = level2 = atoi(argv[++i]) & 3;
+        }
+        else if (!strcmp(argv[i], "--level1") && i + 1 < argc) {
+            level1 = atoi(argv[++i]) & 3;
+        }
+        else if (!strcmp(argv[i], "--level2") && i + 1 < argc) {
+            level2 = atoi(argv[++i]) & 3;
         }
         else if (!strcmp(argv[i], "--ai2")) {
             ai2 = true;
@@ -73,24 +75,19 @@ int main(int argc, char** argv) {
     }
 
     top->p1_up = top->p1_down = top->p2_up = top->p2_down = 0;
+    // opponents live in ai_paddle.v
+    top->ai1_en = ai1; 
+    top->ai2_en = ai2;
+    top->ai1_diff = level1; 
+    top->ai2_diff = level2;
     reset();
 
-    // not exactly needed.... just included for testing in case you need it
+    // not exactly needed.... just included for testing in case you want to do monte carlo runs on the ai, might have to cook up something to get stats running monte carlo runs to get probabilities n shit
+    // only if like you want the nerdy stats n shit ill do it later if i got time
     if (headless) 
     {
         int last1 = 0, last2 = 0;
         for (int f = 0; f < headless_frames; f++) {
-            int u, d;
-            if (ai1) { 
-                ai(true, u, d);  
-                top->p1_up = u; 
-                top->p1_down = d; 
-            }
-            if (ai2) { 
-                ai(false, u, d); 
-                top->p2_up = u; 
-                top->p2_down = d; 
-            }
             run_frame();
             int s1 = top->p1_score + (top->p1_ten ? 0 : 0), s2 = top->p2_score;
             if (s1 != last1 || s2 != last2) { 
@@ -110,6 +107,7 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    // sdl plumbing bs
     if (!SDL_Init(SDL_INIT_VIDEO)) { 
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); 
         return 1; 
@@ -141,21 +139,10 @@ int main(int argc, char** argv) {
             }
         }
         const bool* k = SDL_GetKeyboardState(nullptr);
-        int u, d;
-        top->p1_up = k[SDL_SCANCODE_W];  
+        top->p1_up = k[SDL_SCANCODE_W];
         top->p1_down = k[SDL_SCANCODE_S];
         top->p2_up = k[SDL_SCANCODE_UP]; 
         top->p2_down = k[SDL_SCANCODE_DOWN];
-        if (ai1) { 
-            ai(true, u, d);  
-            top->p1_up = u; 
-            top->p1_down = d; 
-        }
-        if (ai2) { 
-            ai(false, u, d); 
-            top->p2_up = u; 
-            top->p2_down = d; 
-        }
 
         run_frame();
 

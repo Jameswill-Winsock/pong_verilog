@@ -11,16 +11,21 @@ module ball_logic #(
     input  wire clk, srst, frame_tick, halt,
     input  wire [5:0] p1_y, p2_y,
     output wire [5:0] ball_x, ball_y,
+    output wire ball_right,                 // 1 = travelling toward P2
+    output wire signed [4:0] ball_slope,    // tan(theta)*16, signed dy per dx (for AI)
     output reg  p1_point, p2_point
 );
     reg signed [15:0] px, py, vy;     // Q8.8 px/py, vy in px/frame
     reg [11:0] speed;                 // |vx|, Q.8
     reg going_right;
+    reg signed [4:0] slope, nslope;
     reg [7:0] lfsr;
     integer serve_cnt;
  
     assign ball_x = px[13:8];
     assign ball_y = py[13:8];
+    assign ball_right = going_right;
+    assign ball_slope = slope;
  
     localparam signed [15:0] LFACE = ({10'd0, P1_X} + 16'sd2) <<< 8;
     localparam signed [15:0] RFACE = ({10'd0, P2_X} - 16'sd2) <<< 8;
@@ -61,21 +66,41 @@ module ball_logic #(
  
  
     always @* begin
-        nx = px + vx; ny = py + vy; nvy = vy; nright = going_right; nspeed = speed;
+        nx = px + vx; 
+        ny = py + vy; 
+        nvy = vy; 
+        nright = going_right; 
+        nspeed = speed; 
+        nslope = slope;
+
         // walls: mirror the overshoot instead of clamping
-        if (ny < 0)        begin ny = -ny;          nvy = -vy; end
-        else if (ny > BOT) begin ny = 2*BOT - ny;   nvy = -vy; end
+        if (ny < 0) begin 
+            ny = -ny;          
+            nvy = -vy; 
+            nslope = -slope; 
+        end
+        else if (ny > BOT) begin 
+            ny = 2*BOT - ny;   
+            nvy = -vy; 
+            nslope = -slope; 
+        end
+
         // left paddle
         if (!going_right && px >= LFACE && nx < LFACE && hit_p1_rows) begin
-            nx = 2*LFACE - nx; nright = 1'b1;
+            nx = 2*LFACE - nx; 
+            nright = 1'b1;
             nspeed = hit_speed;
-            nvy = vy1[15:0];
+            nvy = vy1[15:0]; 
+            nslope = off1[4:0];
         end
+
         // right paddle
         if (going_right && px <= RFACE && nx > RFACE && hit_p2_rows) begin
-            nx = 2*RFACE - nx; nright = 1'b0;
+            nx = 2*RFACE - nx; 
+            nright = 1'b0;
             nspeed = hit_speed;
-            nvy = vy2[15:0];
+            nvy = vy2[15:0]; 
+            nslope = off2[4:0];
         end
     end
  
@@ -85,23 +110,45 @@ module ball_logic #(
  
     always @(posedge clk or posedge srst) begin
         if (srst) begin
-            px <= CENTER; py <= CENTER; vy <= 16'sd15;
-            speed <= SPEED0; going_right <= 1'b1; lfsr <= 8'hA5;
-            serve_cnt <= SERVE_DELAY; p1_point <= 0; p2_point <= 0;
+            px <= CENTER; 
+            py <= CENTER; 
+            vy <= 16'sd15; 
+            slope <= 5'sd3;
+
+            speed <= SPEED0; 
+            going_right <= 1'b1; 
+            lfsr <= 8'hA5;
+            serve_cnt <= SERVE_DELAY; 
+            p1_point <= 0; 
+            p2_point <= 0;
         end else begin
             lfsr <= {lfsr[6:0], lfsr[7] ^ lfsr[5] ^ lfsr[4] ^ lfsr[3]};
-            p1_point <= 0; p2_point <= 0;
-            if (frame_tick && !halt && serve_cnt > 0) serve_cnt <= serve_cnt - 1;
+
+            p1_point <= 0; 
+            p2_point <= 0;
+
+            if (frame_tick && !halt && serve_cnt > 0) begin 
+                serve_cnt <= serve_cnt - 1;
+            end
+
             if (step_now) begin
                 if (missed_left || missed_right) begin
-                    p2_point <= missed_left; p1_point <= missed_right;
-                    px <= CENTER; py <= CENTER; speed <= SPEED0;
+                    p2_point <= missed_left; 
+                    p1_point <= missed_right;
+                    px <= CENTER; 
+                    py <= CENTER; 
+                    speed <= SPEED0;
                     going_right <= missed_left ? 1'b0 : 1'b1;
-                    vy <= vy_serve[15:0];
+                    vy <= vy_serve[15:0]; 
+                    slope <= soff[4:0];
                     serve_cnt <= SERVE_DELAY;
                 end else begin
-                    px <= nx; py <= ny; vy <= nvy;
-                    going_right <= nright; speed <= nspeed;
+                    px <= nx; 
+                    py <= ny; 
+                    vy <= nvy; 
+                    slope <= nslope;
+                    going_right <= nright; 
+                    speed <= nspeed;
                 end
             end
         end
