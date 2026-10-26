@@ -1,6 +1,6 @@
-// sim_main.cpp - Verilator + SDL3 front end for the Verilog pong.
+// sim_main.cpp - Verilator + SDL3 front end for the verilog pong.
 //   W/S = left paddle, Up/Down = right paddle, R = reset, Esc = quit
-//   --ai1 / --ai2 : let the Verilog ai_paddle drive that paddle
+//   --ai1 / --ai2 : let the verilog ai_paddle drive that paddle
 //   --level N (0 easy .. 3 insane), or --level1 N / --level2 N per side
 //   --mute : no sound (M toggles it in the window)    --wav out.wav : with --headless, also dump the audio
 //   --headless N [out.ppm] : run N frames with no window (for simulated monte carlo runs)
@@ -14,7 +14,7 @@
 #include "Vtop.h"
 #include "verilated.h"
 
-static const int W = 64, H = 64, SCALE = 10, CLOCKS_PER_FRAME = W * H;
+static const int W = 128, H = 64, SCALE = 8, CLOCKS_PER_FRAME = W * H;
 static Vtop* top;
 static uint8_t fb[H][W];
 
@@ -26,8 +26,10 @@ static void tick() {
     top->eval();
 }
 
-// ---- audio: the Verilog beeper is a 1-bit line clocked at 64*64*60 Hz. Box-filter it down to 48 kHz
-// (exactly 800 samples per 4096-clock frame) and strip DC so on/off steps don't click.
+// audio
+// the verilog beeper is a 1-bit line clocked at 128*64*60 Hz
+// so we box-filter it down to 48 kHz
+// (exactly 800 samples per 4096-clock frame) and strip DC so on/off steps don't click
 static const int SAMPLE_RATE = 48000, SAMPLES_PER_FRAME = 800;
 static int16_t audio_buf[SAMPLES_PER_FRAME];
 static std::vector<int16_t> wav_samples;
@@ -123,6 +125,7 @@ int main(int argc, char** argv) {
     }
 
     top->p1_up = top->p1_down = top->p2_up = top->p2_down = 0;
+    top->p1_smash = top->p2_smash = 0;
     // opponents live in ai_paddle.v
     top->ai1_en = ai1; 
     top->ai2_en = ai2;
@@ -213,6 +216,8 @@ int main(int argc, char** argv) {
         top->p1_down = k[SDL_SCANCODE_S];
         top->p2_up = k[SDL_SCANCODE_UP]; 
         top->p2_down = k[SDL_SCANCODE_DOWN];
+        top->p1_smash = k[SDL_SCANCODE_D];          // smash: D for P1, Left arrow for P2
+        top->p2_smash = k[SDL_SCANCODE_LEFT];
 
         run_frame();
         // keep latency bounded: if more than ~3 frames are already queued, drop this frame's audio

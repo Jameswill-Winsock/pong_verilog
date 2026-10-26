@@ -1,5 +1,5 @@
 module score_display(
-    input wire [5:0] hsync,
+    input wire [6:0] hsync,
     input wire [5:0] vsync,
     input wire [3:0] p1_score,
     input wire p1_ten,
@@ -9,8 +9,8 @@ module score_display(
 );
 
 localparam [6:0] TOP_Y = 7'd3;
-localparam [6:0] P1_TENS = 7'd10, P1_ONES = 7'd18;
-localparam [6:0] P2_TENS = 7'd40, P2_ONES = 7'd48;
+localparam [6:0] P1_TENS = 7'd42, P1_ONES = 7'd50;
+localparam [6:0] P2_TENS = 7'd72, P2_ONES = 7'd80;
 
 // 3x5 font, 15 bits per digit, row 0 first, leftmost column first
 function [14:0] glyph(input [3:0] d);
@@ -31,13 +31,14 @@ endfunction
 
 // check if current pixel is lit by digit d drawn with its top-left at x0, top_y
 function digit_on(input [3:0] d, input [6:0] x0);
-    reg [6:0] lx, ly;
+    reg [7:0] lx;
+    reg [6:0] ly;
     reg [3:0] col, row;
     reg [14:0] g;
     begin
         lx = {1'b0, hsync} - x0;
         ly = {1'b0, vsync} - TOP_Y;
-        if ({1'b0, hsync} >= x0 && lx < 7'd6 && {1'b0, vsync} >= TOP_Y && ly < 7'd10) begin
+        if ({1'b0, hsync} >= {1'b0, x0} && lx < 8'd6 && {1'b0, vsync} >= TOP_Y && ly < 7'd10) begin
             col = {2'b00, lx[2:1]};
             row = {1'b0, ly[3:1]};
             g = glyph(d);

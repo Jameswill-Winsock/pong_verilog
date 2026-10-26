@@ -1,5 +1,5 @@
 module paddle_logic #(
-    parameter [5:0] X = 6'd2,
+    parameter [6:0] X = 7'd2,
     parameter [5:0] START_Y = 6'd27,
     parameter [5:0] HEIGHT = 6'd10,
     parameter [5:0] PADDLE_STEP = 6'd2
@@ -9,7 +9,7 @@ module paddle_logic #(
     input wire frame_tick,
     input wire up, 
     input wire down,
-    output reg [5:0] x_coord,
+    output reg [6:0] x_coord,
     output reg [5:0] y_coord   
 );
 

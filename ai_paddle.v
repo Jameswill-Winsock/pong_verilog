@@ -13,40 +13,47 @@
 // if you are trying to understand this code, think like the ai
 // just dont become the ai lul
 module ai_paddle #(
-    parameter [6:0] FACE_X = 7'd58,   // ball left-edge x at which this paddle is hit
+    parameter [6:0] FACE_X = 7'd122,   // ball left-edge x at which this paddle is hit
     parameter       LEFT   = 0,
     parameter [5:0] H      = 6'd10,
     parameter [7:0] SEED   = 8'hC3
 ) (
     input  wire clk, srst, frame_tick,
     input  wire [1:0] diff,
-    input  wire [5:0] ball_x, ball_y,
+    input  wire [6:0] ball_x,
+    input  wire [5:0] ball_y,
     input  wire ball_right,
     input  wire signed [4:0] ball_slope,
+    input  wire [11:0] ball_speed,
     input  wire [5:0] my_y, opp_y,
-    output wire up, down
+    output wire up, down,
+    output wire smash                  // smash button; smash_ctrl ignores it unless the meter is full
 );
     wire approaching = LEFT ? ~ball_right : ball_right;
 
     // distance (px) from ball to my hit plane, 0 if already past it
-    wire signed [7:0] bx8 = {2'b00, ball_x};
-    wire signed [7:0] dxs = LEFT ? (bx8 - $signed({1'b0, FACE_X})) : ($signed({1'b0, FACE_X}) - bx8);
-    wire [5:0] dx = dxs[7] ? 6'd0 : dxs[5:0];
+    wire signed [8:0] bx9 = {2'b00, ball_x};
+    wire signed [8:0] dxs = LEFT ? (bx9 - $signed({2'b00, FACE_X})) : ($signed({2'b00, FACE_X}) - bx9);
+    wire [6:0] dx = dxs[8] ? 7'd0 : dxs[6:0];
 
     // y at my plane, unfolded then folded off the walls
-    wire signed [12:0] prod = $signed({7'd0, dx}) * ball_slope;   // dx*slope
+    // on the 128-wide field |dx*slope/16| reaches 126*15/16 = 118, so the path can bounce more than
+    // once: reduce modulo the wall-to-wall period (124) with two conditional adds/subtracts, then reflect
+    wire signed [12:0] prod = $signed({6'd0, dx}) * ball_slope;   // dx*slope
     wire signed [12:0] yu   = $signed({7'd0, ball_y}) + (prod >>> 4);
-    wire signed [12:0] yf   = (yu < 0) ? -yu : (yu > 13'sd62) ? (13'sd124 - yu) : yu;
+    wire signed [12:0] yt1  = (yu < 0) ? (yu + 13'sd124) : yu;
+    wire signed [12:0] yt2  = (yt1 >= 13'sd124) ? (yt1 - 13'sd124) : yt1;
+    wire signed [12:0] yf   = (yt2 > 13'sd62) ? (13'sd124 - yt2) : yt2;
 
     // react distance by difficulty
     // yea yea i know its a cheap ass approach by just limiting view distance but IT WORKS MAN 
     // YOU CAN SEE THE ENTIRE THING AND YET YOU'LL MISS IT KEK
-    reg [5:0] react;
+    reg [6:0] react;
     always @* case (diff)
-        2'd0: react = 6'd24;
-        2'd1: react = 6'd36;
-        2'd2: react = 6'd50;
-        default: react = 6'd63;
+        2'd0: react = 7'd48;
+        2'd1: react = 7'd72;
+        2'd2: react = 7'd100;
+        default: react = 7'd127;
     endcase
 
     // aim: from diff>=2 try to send the ball away from the opponent
@@ -57,6 +64,14 @@ module ai_paddle #(
     reg signed [4:0] err;
     reg approaching_q;
     reg [1:0] phase;                                              // frame phase for the speed handicap
+    reg [3:0] delay_cnt;                                          // reaction delay after the ball turns toward me
+    reg [3:0] delay_load;
+    always @* case (diff)
+        2'd0: delay_load = 4'd12;
+        2'd1: delay_load = 4'd8;
+        2'd2: delay_load = 4'd5;
+        default: delay_load = 4'd0;
+    endcase
     wire signed [4:0] raw = {lfsr[3], lfsr[3:0]};                 // -8..7
     always @(posedge clk or posedge srst) begin
         if (srst) begin
@@ -64,20 +79,24 @@ module ai_paddle #(
             err <= 5'sd0; 
             approaching_q <= 1'b0; 
             phase <= 2'd0;
+            delay_cnt <= 4'd0;
         end else begin
             lfsr <= {lfsr[6:0], lfsr[7] ^ lfsr[5] ^ lfsr[4] ^ lfsr[3]};
             if (frame_tick) begin
                 approaching_q <= approaching;
                 phase <= phase + 2'd1;
-                if (approaching && !approaching_q)
+                if (delay_cnt != 4'd0) delay_cnt <= delay_cnt - 4'd1;
+                if (approaching && !approaching_q) begin
+                    delay_cnt <= delay_load;
                     err <= (diff == 2'd0) ? raw : (diff == 2'd1) ? (raw >>> 1) : (diff == 2'd2) ? (raw >>> 2) : 5'sd0;
+                end
             end
         end
     end
 
     wire signed [12:0] ball_c  = $signed({7'd0, ball_y}) + 13'sd1;   // ball is 2 px tall
     wire signed [12:0] pred_c  = yf + 13'sd1 + aim + {{8{err[4]}}, err};
-    wire signed [12:0] target  = approaching ? ((dx <= react) ? pred_c : ball_c) : 13'sd32;
+    wire signed [12:0] target  = approaching ? ((dx <= react && delay_cnt == 4'd0) ? pred_c : ball_c) : 13'sd32;
     wire signed [12:0] my_c    = $signed({7'd0, my_y}) + $signed({7'd0, H >> 1});
     wire signed [12:0] d       = target - my_c;
 
@@ -92,6 +111,14 @@ module ai_paddle #(
         2'd1: allow = phase[0];
         default: allow = (phase == 2'd0);
     endcase
+
+    // smash timing: press when the ball is about 4 frames from my face AND my paddle is lined up
+    // (|d| <= 2), so a mistimed press can't waste the charge. dx*256 <= 4*speed  <=>  dx/speed <= 4 frames.
+    wire [14:0] dx_q8 = {dx, 8'd0};
+    wire [14:0] near_q8 = {1'b0, ball_speed, 2'b00};
+    wire aligned = (d >= -13'sd2) && (d <= 13'sd2);
+    wire smash_ok = (diff == 2'd3) ? 1'b1 : (diff == 2'd2) ? lfsr[0] : 1'b0;   // level 0/1 never smash, 2 half the time
+    assign smash = approaching && smash_ok && aligned && (dx != 7'd0) && (dx_q8 <= near_q8);
 
     assign up   = allow && (d < -13'sd1);
     assign down = allow && (d >  13'sd1);

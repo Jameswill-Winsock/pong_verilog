@@ -1,13 +1,13 @@
 // paddle_draw.v
-// High while the pixel being scanned (hsync, vsync) is inside the paddle
-// rectangle. Purely combinational.
+// high while the pixel being scanned (hsync, vsync) is inside the paddle rectangle
+// purely combinational
 module paddle_draw #(
     parameter [5:0] WIDTH  = 6'd2,
     parameter [5:0] HEIGHT = 6'd10
 ) (
-    input  wire [5:0] hsync,
+    input  wire [6:0] hsync,
     input  wire [5:0] vsync,
-    input  wire [5:0] x_coord,
+    input  wire [6:0] x_coord,
     input  wire [5:0] y_coord,
     output wire       vout
 );
