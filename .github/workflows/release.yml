@@ -1,0 +1,178 @@
+name: Build and publish Classic Pong
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Linux x64
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential make verilator libsdl3-dev pkg-config
+
+      - name: Build and smoke-test
+        run: |
+          set -euo pipefail
+          make clean
+          make -j2
+          ./pong --headless 1 /tmp/pong-smoke.ppm
+          test -s /tmp/pong-smoke.ppm
+
+      - name: Package Linux archive
+        run: |
+          set -euo pipefail
+          mkdir -p dist/linux-x64
+          cp pong dist/linux-x64/classic-pong
+          cp LICENSE dist/linux-x64/LICENSE
+          cat > dist/linux-x64/README.txt <<'EOF'
+          Classic Pong - Linux x86_64
+
+          Built on Ubuntu 26.04. You need a compatible x86_64 Linux system
+          and the SDL3 runtime library (libSDL3.so.0).
+
+          On Ubuntu 26.04, install the runtime with:
+              sudo apt install libsdl3-0
+
+          Extract this archive, then run:
+              ./classic-pong
+
+          Controls:
+            Menus: Up/Down and Enter
+            Player 1: W/S to move, D or Space to smash
+            Player 2: Up/Down to move, Left to smash
+            P: pause     R: restart     M: mute     Esc: back/pause
+          EOF
+          chmod +x dist/linux-x64/classic-pong
+          tar -czf ClassicPong-Linux-x64.tar.gz -C dist linux-x64
+
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-package
+          path: ClassicPong-Linux-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows:
+    name: Build Windows x64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Install MSYS2 build dependencies
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            make
+            zip
+            perl
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-verilator
+            mingw-w64-ucrt-x86_64-sdl3
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-ntldd
+
+      - name: Build, smoke-test, and bundle DLLs
+        run: |
+          set -euo pipefail
+          rm -rf obj_dir dist
+          mkdir -p dist/windows-x64
+
+          verilator -Wno-fatal --cc --exe --top-module top -Mdir obj_dir \
+            top.v netdraw.v paddle_logic.v paddle_draw.v ball_logic.v \
+            score_display.v score_counter.v ai_paddle.v beeper.v \
+            smash_ctrl.v meter_draw.v music.v music_rom.v sim_main.cpp \
+            -o classic-pong.exe
+
+          make -C obj_dir -f Vtop.mk -j2 \
+            VM_USER_CFLAGS="$(pkg-config --cflags sdl3)" \
+            VM_USER_LDLIBS="$(pkg-config --libs sdl3)"
+
+          test -f obj_dir/classic-pong.exe
+          cp obj_dir/classic-pong.exe dist/windows-x64/classic-pong.exe
+          (cd dist/windows-x64 && ./classic-pong.exe --headless 1 pong-smoke.ppm)
+          test -s dist/windows-x64/pong-smoke.ppm
+          rm -f dist/windows-x64/pong-smoke.ppm
+
+          # Copy non-Windows DLL dependencies from the MSYS2 UCRT64 toolchain.
+          ntldd -R dist/windows-x64/classic-pong.exe > dist/windows-x64/dll-report.txt
+          while IFS= read -r dll_path; do
+            unix_path="$(cygpath -u "$dll_path")"
+            case "$unix_path" in
+              "$MINGW_PREFIX"/*)
+                if [ -f "$unix_path" ]; then
+                  cp -n "$unix_path" dist/windows-x64/
+                fi
+                ;;
+            esac
+          done < <(grep -oP '(?<==> )(.*msys64.*)(?= \()' dist/windows-x64/dll-report.txt || true)
+
+          test -f dist/windows-x64/SDL3.dll
+          cp LICENSE dist/windows-x64/LICENSE
+          rm -f dist/windows-x64/dll-report.txt
+          cat > dist/windows-x64/README.txt <<'EOF'
+          Classic Pong - Windows x64
+
+          Extract the whole ZIP into one folder, keeping the EXE and DLL files
+          together. Run classic-pong.exe.
+
+          Controls:
+            Menus: Up/Down and Enter
+            Player 1: W/S to move, D or Space to smash
+            Player 2: Up/Down to move, Left to smash
+            P: pause     R: restart     M: mute     Esc: back/pause
+          EOF
+          (cd dist && zip -qr ../ClassicPong-Windows-x64.zip windows-x64)
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: ClassicPong-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - build-linux
+      - build-windows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packaged binaries
+        uses: actions/download-artifact@v5
+        with:
+          pattern: '*-package'
+          path: release-assets
+          merge-multiple: true
+
+      - name: Attach binaries to GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          files: |
+            release-assets/ClassicPong-Linux-x64.tar.gz
+            release-assets/ClassicPong-Windows-x64.zip
