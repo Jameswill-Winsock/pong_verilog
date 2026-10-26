@@ -2,6 +2,8 @@
 
 Classic pong, written in verilog, for desktop. 
 Simulated using verilator, and C++ frontend handles keyboard, window, ui, rendering, audio using SDL3.
+<img width="1025" height="597" alt="main menu" src="https://github.com/user-attachments/assets/be7ed010-be58-4c1d-9791-2b0591cc6d2c" />
+
 
 ## Features
 
@@ -11,6 +13,9 @@ Simulated using verilator, and C++ frontend handles keyboard, window, ui, render
 - Four AI difficulty levels — Easy, Medium, Hard, and Insane.
 - Smash mechanic with a charge meter.
 - First-to-10 scoring.
+<img width="1025" height="599" alt="CPU vs CPU gameplay" src="https://github.com/user-attachments/assets/6cf89488-a465-4111-9562-11f413187941" />
+
+
 ## Controls
 
 ### Menus
