@@ -117,9 +117,11 @@ jobs:
             smash_ctrl.v meter_draw.v music.v music_rom.v sim_main.cpp \
             ci_sc_time_stamp.cpp -o classic-pong.exe
 
-          # MSYS2 GCC 16 has a known link failure with -Os and C++20's
-          # decloned std::string move constructor. Override Verilator's default -Os.
-          make -C obj_dir -f Vtop.mk -j2 OPT_FAST=-O2 \
+          # MSYS2 GCC 16 has a known link failure with -Os/-Oz and C++20's
+          # std::string move constructor. OPT_FAST controls generated model code;
+          # OPT_SLOW controls Verilator runtime objects such as verilated.o.
+          # Override both because setting OPT_FAST alone leaves verilated.o at -Os.
+          make -C obj_dir -f Vtop.mk -j2 OPT_FAST=-O2 OPT_SLOW=-O2 \
             VM_USER_CFLAGS="$(pkg-config --cflags sdl3)" \
             VM_USER_LDLIBS="$(pkg-config --libs sdl3)"
 
