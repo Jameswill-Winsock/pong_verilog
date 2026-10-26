@@ -101,12 +101,9 @@ jobs:
           rm -rf obj_dir dist
           mkdir -p dist/windows-x64
 
-          # Verilator's generated Makefile calls python3 to combine C++ sources.
           python3 --version
           command -v python3
 
-          # Verilator's Windows runtime references sc_time_stamp() on some toolchains.
-          # This game advances its own clock explicitly, so wall/simulation time is unused.
           cat > ci_sc_time_stamp.cpp <<'EOF'
           double sc_time_stamp() { return 0.0; }
           EOF
@@ -117,11 +114,9 @@ jobs:
             smash_ctrl.v meter_draw.v music.v music_rom.v sim_main.cpp \
             ci_sc_time_stamp.cpp -o classic-pong.exe
 
-          # MSYS2 GCC 16 has a known link failure with -Os/-Oz and C++20's
-          # std::string move constructor. OPT_FAST controls generated model code;
-          # OPT_SLOW controls Verilator runtime objects such as verilated.o.
-          # Override both because setting OPT_FAST alone leaves verilated.o at -Os.
-          make -C obj_dir -f Vtop.mk -j2 OPT_FAST=-O2 OPT_SLOW=-O2 \
+          sed -i 's/-Os/-O2/g' obj_dir/Vtop.mk
+
+          make -C obj_dir -f Vtop.mk -j2 \
             VM_USER_CFLAGS="$(pkg-config --cflags sdl3)" \
             VM_USER_LDLIBS="$(pkg-config --libs sdl3)"
 
@@ -131,7 +126,6 @@ jobs:
           test -s dist/windows-x64/pong-smoke.ppm
           rm -f dist/windows-x64/pong-smoke.ppm
 
-          # Copy non-Windows DLL dependencies from the MSYS2 UCRT64 toolchain.
           ntldd -R dist/windows-x64/classic-pong.exe > dist/windows-x64/dll-report.txt
           while IFS= read -r dll_path; do
             unix_path="$(cygpath -u "$dll_path")"
@@ -147,6 +141,7 @@ jobs:
           test -f dist/windows-x64/SDL3.dll
           cp LICENSE dist/windows-x64/LICENSE
           rm -f dist/windows-x64/dll-report.txt
+
           cat > dist/windows-x64/README.txt <<'EOF'
           Classic Pong - Windows x64
 
@@ -159,6 +154,7 @@ jobs:
             Player 2: Up/Down to move, Left to smash
             P: pause     R: restart     M: mute     Esc: back/pause
           EOF
+
           (cd dist && zip -qr ../ClassicPong-Windows-x64.zip windows-x64)
 
       - name: Upload Windows package
