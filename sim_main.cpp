@@ -18,6 +18,8 @@
 #include "verilated.h"
 #include "ui.h"
 
+double sc_time_stamp() { return 0.0; }
+
 static const int W = 128, H = 64, SCALE = 8, CLOCKS_PER_FRAME = W * H;
 static Vtop* top;
 static uint8_t fb[H][W];

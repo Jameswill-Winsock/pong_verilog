@@ -8,7 +8,7 @@ SDL_LIBS   := $(shell pkg-config --libs sdl3)
 # two steps (generate C++, then compile/link) so SDL flags never go through
 # verilator's own option parser, which differs between versions.
 pong: $(SRC) sim_main.cpp ui.h
-	verilator -Wno-fatal --cc --exe --top-module top -Mdir obj_dir $(SRC) sim_main.cpp -o pong
+	verilator -Wno-fatal --cc --exe --top-module top -Mdir obj_dir -CFLAGS "-DVL_TIME_CONTEXT" $(SRC) sim_main.cpp -o pong
 	$(MAKE) -C obj_dir -f Vtop.mk VM_USER_CFLAGS="$(SDL_CFLAGS)" VM_USER_LDLIBS="$(SDL_LIBS)"
 	cp obj_dir/pong ./pong
 
