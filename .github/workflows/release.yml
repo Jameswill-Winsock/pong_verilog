@@ -88,6 +88,7 @@ jobs:
             make
             zip
             perl
+            mingw-w64-ucrt-x86_64-python
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-verilator
             mingw-w64-ucrt-x86_64-sdl3
@@ -99,6 +100,10 @@ jobs:
           set -euo pipefail
           rm -rf obj_dir dist
           mkdir -p dist/windows-x64
+
+          # Verilator's generated Makefile calls python3 to combine C++ sources.
+          python3 --version
+          command -v python3
 
           verilator -Wno-fatal --cc --exe --top-module top -Mdir obj_dir \
             top.v netdraw.v paddle_logic.v paddle_draw.v ball_logic.v \
