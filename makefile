@@ -1,6 +1,6 @@
 # make       -> build ./pong   (needs verilator, g++, make, SDL3 dev files)
 # make run   -> build and play
-SRC = top.v netdraw.v paddle_logic.v paddle_draw.v ball_logic.v score_display.v score_counter.v ai_paddle.v
+SRC = top.v netdraw.v paddle_logic.v paddle_draw.v ball_logic.v score_display.v score_counter.v ai_paddle.v beeper.v
 
 SDL_CFLAGS := $(shell pkg-config --cflags sdl3)
 SDL_LIBS   := $(shell pkg-config --libs sdl3)

@@ -26,7 +26,8 @@ module top(
     output wire [5:0] ball_x,
     output wire [5:0] ball_y,
     output wire [5:0] p1_y,
-    output wire [5:0] p2_y
+    output wire [5:0] p2_y,
+    output wire beep            // 1-bit beeper line
 );
 
 localparam [5:0] PADDLE_H = 6'd10;
@@ -37,6 +38,7 @@ localparam [5:0] P2_X = 6'd60;
 wire [5:0] hsync, vsync;
 wire net_pixel;
 wire p1_point, p2_point;
+wire ev_wall, ev_paddle;
 wire [5:0] p1_x, p2_x;
 wire p1_pixel, p2_pixel, ball_pixel, score_pixel;
 
@@ -169,7 +171,9 @@ ball_logic #(
     .ball_right(ball_right),
     .ball_slope(ball_slope),
     .p1_point(p1_point),
-    .p2_point(p2_point)
+    .p2_point(p2_point),
+    .ev_wall(ev_wall),
+    .ev_paddle(ev_paddle)
 );
 
 wire ball_in_x = (hsync == ball_x) || (hsync == ball_x + 6'd1);
@@ -195,6 +199,20 @@ score_counter u_score (
     .attract_n(attract_n_unused)
 );
 assign game_over = stop_g;
+
+// sound
+reg go_q;
+always @(posedge clk or posedge srst) begin
+    if (srst) go_q <= 1'b0;
+    else      go_q <= game_over;
+end
+beeper u_beeper(
+    .clk(clk), .srst(srst), .frame_tick(frame_tick),
+    .ev_wall(ev_wall), .ev_paddle(ev_paddle),
+    .ev_point(p1_point | p2_point),
+    .ev_over(game_over & ~go_q),
+    .beep(beep)
+);
 
 score_display u_score_display(
     .hsync(hsync),

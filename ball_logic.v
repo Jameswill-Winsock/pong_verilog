@@ -13,12 +13,14 @@ module ball_logic #(
     output wire [5:0] ball_x, ball_y,
     output wire ball_right,                 // 1 = travelling toward P2
     output wire signed [4:0] ball_slope,    // tan(theta)*16, signed dy per dx (for AI)
-    output reg  p1_point, p2_point
+    output reg  p1_point, p2_point,
+    output reg  ev_wall, ev_paddle          // one-clock pulses for sound
 );
     reg signed [15:0] px, py, vy;     // Q8.8 px/py, vy in px/frame
     reg [11:0] speed;                 // |vx|, Q.8
     reg going_right;
     reg signed [4:0] slope, nslope;
+    reg wall_hit, paddle_hit;
     reg [7:0] lfsr;
     integer serve_cnt;
  
@@ -72,14 +74,18 @@ module ball_logic #(
         nright = going_right; 
         nspeed = speed; 
         nslope = slope;
+        wall_hit = 1'b0;
+        paddle_hit = 1'b0;
 
         // walls: mirror the overshoot instead of clamping
         if (ny < 0) begin 
+            wall_hit = 1'b1;
             ny = -ny;          
             nvy = -vy; 
             nslope = -slope; 
         end
         else if (ny > BOT) begin 
+            wall_hit = 1'b1;
             ny = 2*BOT - ny;   
             nvy = -vy; 
             nslope = -slope; 
@@ -88,6 +94,7 @@ module ball_logic #(
         // left paddle
         if (!going_right && px >= LFACE && nx < LFACE && hit_p1_rows) begin
             nx = 2*LFACE - nx; 
+            paddle_hit = 1'b1;
             nright = 1'b1;
             nspeed = hit_speed;
             nvy = vy1[15:0]; 
@@ -97,6 +104,7 @@ module ball_logic #(
         // right paddle
         if (going_right && px <= RFACE && nx > RFACE && hit_p2_rows) begin
             nx = 2*RFACE - nx; 
+            paddle_hit = 1'b1;
             nright = 1'b0;
             nspeed = hit_speed;
             nvy = vy2[15:0]; 
@@ -121,11 +129,15 @@ module ball_logic #(
             serve_cnt <= SERVE_DELAY; 
             p1_point <= 0; 
             p2_point <= 0;
+            ev_wall <= 0; 
+            ev_paddle <= 0;
         end else begin
             lfsr <= {lfsr[6:0], lfsr[7] ^ lfsr[5] ^ lfsr[4] ^ lfsr[3]};
 
             p1_point <= 0; 
             p2_point <= 0;
+            ev_wall <= 0; 
+            ev_paddle <= 0;
 
             if (frame_tick && !halt && serve_cnt > 0) begin 
                 serve_cnt <= serve_cnt - 1;
@@ -143,6 +155,8 @@ module ball_logic #(
                     slope <= soff[4:0];
                     serve_cnt <= SERVE_DELAY;
                 end else begin
+                    ev_wall <= wall_hit;
+                    ev_paddle <= paddle_hit;
                     px <= nx; 
                     py <= ny; 
                     vy <= nvy; 

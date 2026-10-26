@@ -2,12 +2,15 @@
 //   W/S = left paddle, Up/Down = right paddle, R = reset, Esc = quit
 //   --ai1 / --ai2 : let the Verilog ai_paddle drive that paddle
 //   --level N (0 easy .. 3 insane), or --level1 N / --level2 N per side
+//   --mute : no sound (M toggles it in the window)    --wav out.wav : with --headless, also dump the audio
 //   --headless N [out.ppm] : run N frames with no window (for simulated monte carlo runs)
 #include <SDL3/SDL.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
+#include <cstdint>
 #include "Vtop.h"
 #include "verilated.h"
 
@@ -23,10 +26,46 @@ static void tick() {
     top->eval();
 }
 
+// ---- audio: the Verilog beeper is a 1-bit line clocked at 64*64*60 Hz. Box-filter it down to 48 kHz
+// (exactly 800 samples per 4096-clock frame) and strip DC so on/off steps don't click.
+static const int SAMPLE_RATE = 48000, SAMPLES_PER_FRAME = 800;
+static int16_t audio_buf[SAMPLES_PER_FRAME];
+static std::vector<int16_t> wav_samples;
+static bool record_wav = false;
+
 static void run_frame() { 
+    static int sum = 0, cnt = 0;
+    static float x1 = 0.f, y1 = 0.f;                 // DC blocker state
+    int n = 0;
     for (int i = 0; i < CLOCKS_PER_FRAME; i++) {
         tick(); 
+        sum += top->beep; 
+        cnt++;
+        if ((i + 1) * SAMPLES_PER_FRAME / CLOCKS_PER_FRAME > i * SAMPLES_PER_FRAME / CLOCKS_PER_FRAME) {
+            float x = (float)sum / cnt;              // 0..1 average of the beep line
+            float y = x - x1 + 0.995f * y1;
+            x1 = x; 
+            y1 = y;
+            audio_buf[n++] = (int16_t)(y * 9000.f);
+            sum = 0; 
+            cnt = 0;
+        }
     }
+    if (record_wav) {
+        wav_samples.insert(wav_samples.end(), audio_buf, audio_buf + n);
+    }
+}
+
+static void write_wav(const char* path) {
+    FILE* fp = fopen(path, "wb");
+    if (!fp) return;
+    uint32_t data_bytes = (uint32_t)(wav_samples.size() * 2), riff = 36 + data_bytes, fmt = 16, rate = SAMPLE_RATE, byte_rate = SAMPLE_RATE * 2;
+    uint16_t pcm = 1, ch = 1, align = 2, bits = 16;
+    fwrite("RIFF", 1, 4, fp); fwrite(&riff, 4, 1, fp); fwrite("WAVEfmt ", 1, 8, fp); fwrite(&fmt, 4, 1, fp);
+    fwrite(&pcm, 2, 1, fp); fwrite(&ch, 2, 1, fp); fwrite(&rate, 4, 1, fp); fwrite(&byte_rate, 4, 1, fp);
+    fwrite(&align, 2, 1, fp); fwrite(&bits, 2, 1, fp); fwrite("data", 1, 4, fp); fwrite(&data_bytes, 4, 1, fp);
+    fwrite(wav_samples.data(), 2, wav_samples.size(), fp);
+    fclose(fp);
 }
 
 static void reset() {
@@ -48,6 +87,8 @@ int main(int argc, char** argv) {
     top = new Vtop;
     bool ai1 = false, ai2 = false, headless = false;
     int level1 = 2, level2 = 2;
+    bool mute = false;
+    const char* wav_path = nullptr;
     int headless_frames = 0; 
     const char* out = nullptr;
     for (int i = 1; i < argc; i++) {
@@ -62,6 +103,13 @@ int main(int argc, char** argv) {
         }
         else if (!strcmp(argv[i], "--level2") && i + 1 < argc) {
             level2 = atoi(argv[++i]) & 3;
+        }
+        else if (!strcmp(argv[i], "--mute")) {
+            mute = true;
+        }
+        else if (!strcmp(argv[i], "--wav") && i + 1 < argc) {
+            wav_path = argv[++i];
+            record_wav = true;
         }
         else if (!strcmp(argv[i], "--ai2")) {
             ai2 = true;
@@ -103,12 +151,15 @@ int main(int argc, char** argv) {
             fwrite(fb, 1, W * H, fp); 
             fclose(fp); 
         }
+        if (wav_path) {
+            write_wav(wav_path);
+        }
         delete top; 
         return 0;
     }
 
     // sdl plumbing bs
-    if (!SDL_Init(SDL_INIT_VIDEO)) { 
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { 
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); 
         return 1; 
     }
@@ -117,6 +168,22 @@ int main(int argc, char** argv) {
     if (!win || !ren) { 
         fprintf(stderr, "SDL window/renderer: %s\n", SDL_GetError()); 
         return 1; 
+    }
+    // audio is optional: if the device won't open the game just runs silent
+    bool muted = false;
+    SDL_AudioStream* astream = nullptr;
+    if (!mute) {
+        SDL_AudioSpec spec;
+        SDL_zero(spec);
+        spec.format = SDL_AUDIO_S16;
+        spec.channels = 1;
+        spec.freq = SAMPLE_RATE;
+        astream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+        if (astream) {
+            SDL_ResumeAudioStreamDevice(astream);
+        } else {
+            fprintf(stderr, "audio disabled: %s\n", SDL_GetError());
+        }
     }
     SDL_SetRenderVSync(ren, 1);
     SDL_SetRenderLogicalPresentation(ren, W, H, SDL_LOGICAL_PRESENTATION_LETTERBOX);
@@ -134,6 +201,9 @@ int main(int argc, char** argv) {
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_ESCAPE) {
                 running = false;
             }
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_M) {
+                muted = !muted;
+            }
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_R) {
                 reset();
             }
@@ -145,6 +215,10 @@ int main(int argc, char** argv) {
         top->p2_down = k[SDL_SCANCODE_DOWN];
 
         run_frame();
+        // keep latency bounded: if more than ~3 frames are already queued, drop this frame's audio
+        if (astream && !muted && SDL_GetAudioStreamQueued(astream) < 3 * SAMPLES_PER_FRAME * 2) {
+            SDL_PutAudioStreamData(astream, audio_buf, SAMPLES_PER_FRAME * (int)sizeof(int16_t));
+        }
 
         uint32_t px[W * H];
         for (int y = 0; y < H; y++) {
@@ -163,6 +237,9 @@ int main(int argc, char** argv) {
 
         Uint64 dt = SDL_GetTicks() - t0;
         if (dt < 16) SDL_Delay((Uint32)(16 - dt));          // ~60 fps
+    }
+    if (astream) {
+        SDL_DestroyAudioStream(astream);
     }
     SDL_DestroyTexture(tex); 
     SDL_DestroyRenderer(ren); 
