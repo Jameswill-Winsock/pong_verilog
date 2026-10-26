@@ -105,13 +105,21 @@ jobs:
           python3 --version
           command -v python3
 
+          # Verilator's Windows runtime references sc_time_stamp() on some toolchains.
+          # This game advances its own clock explicitly, so wall/simulation time is unused.
+          cat > ci_sc_time_stamp.cpp <<'EOF'
+          double sc_time_stamp() { return 0.0; }
+          EOF
+
           verilator -Wno-fatal --cc --exe --top-module top -Mdir obj_dir \
             top.v netdraw.v paddle_logic.v paddle_draw.v ball_logic.v \
             score_display.v score_counter.v ai_paddle.v beeper.v \
             smash_ctrl.v meter_draw.v music.v music_rom.v sim_main.cpp \
-            -o classic-pong.exe
+            ci_sc_time_stamp.cpp -o classic-pong.exe
 
-          make -C obj_dir -f Vtop.mk -j2 \
+          # MSYS2 GCC 16 has a known link failure with -Os and C++20's
+          # decloned std::string move constructor. Override Verilator's default -Os.
+          make -C obj_dir -f Vtop.mk -j2 OPT_FAST=-O2 \
             VM_USER_CFLAGS="$(pkg-config --cflags sdl3)" \
             VM_USER_LDLIBS="$(pkg-config --libs sdl3)"
 
