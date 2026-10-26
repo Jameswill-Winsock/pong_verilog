@@ -11,6 +11,7 @@ module top(
     input wire [1:0] ai2_diff,
     input wire p1_smash,        // smash buttons (rising edge arms a full meter)
     input wire p2_smash,
+    input wire music_en,        // background soundtrack on/off (off also rewinds it)
 
     // vid ram write port
     output wire vid_clk,
@@ -29,7 +30,8 @@ module top(
     output wire [5:0] ball_y,
     output wire [5:0] p1_y,
     output wire [5:0] p2_y,
-    output wire beep,           // 1-bit beeper line
+    output wire beep,           // 1-bit beeper line (sound effects)
+    output wire [1:0] music,    // soundtrack: how many of the 3 voices are high
     output wire [1:0] p1_meter, // smash charge 0..3
     output wire [1:0] p2_meter,
     output wire p1_armed,
@@ -300,9 +302,18 @@ beeper u_beeper(
     .frame_tick(frame_tick),
     .ev_wall(ev_wall), 
     .ev_paddle(ev_paddle),
+    .ev_smash(ev_smash),
     .ev_point(p1_point | p2_point),
     .ev_over(game_over & ~go_q),
     .beep(beep)
+);
+
+music u_music(
+    .clk(clk),
+    .srst(srst),
+    .frame_tick(frame_tick),
+    .en(music_en),
+    .level(music)
 );
 
 score_display u_score_display(

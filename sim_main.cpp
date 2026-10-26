@@ -1,7 +1,10 @@
 // sim_main.cpp - Verilator + SDL3 front end for the verilog pong.
-//   W/S = left paddle, Up/Down = right paddle, R = reset, Esc = quit
+//   title screen -> pick 1 player / 2 players / cpu vs cpu -> (difficulty) -> 3-2-1 -> game (see ui.h)
+//   in game: W/S = left paddle, D or Space = left smash, Up/Down = right paddle, Left = right smash
+//            (in 1 player mode the arrows work for you too), P = pause, R = restart, M = mute, Esc = pause/back
 //   --ai1 / --ai2 : let the verilog ai_paddle drive that paddle
 //   --level N (0 easy .. 3 insane), or --level1 N / --level2 N per side
+//   --nomusic : no soundtrack (sound effects only)
 //   --mute : no sound (M toggles it in the window)    --wav out.wav : with --headless, also dump the audio
 //   --headless N [out.ppm] : run N frames with no window (for simulated monte carlo runs)
 #include <SDL3/SDL.h>
@@ -13,6 +16,7 @@
 #include <cstdint>
 #include "Vtop.h"
 #include "verilated.h"
+#include "ui.h"
 
 static const int W = 128, H = 64, SCALE = 8, CLOCKS_PER_FRAME = W * H;
 static Vtop* top;
@@ -34,6 +38,7 @@ static const int SAMPLE_RATE = 48000, SAMPLES_PER_FRAME = 800;
 static int16_t audio_buf[SAMPLES_PER_FRAME];
 static std::vector<int16_t> wav_samples;
 static bool record_wav = false;
+static bool use_music = true;
 
 static void run_frame() { 
     static int sum = 0, cnt = 0;
@@ -41,10 +46,10 @@ static void run_frame() {
     int n = 0;
     for (int i = 0; i < CLOCKS_PER_FRAME; i++) {
         tick(); 
-        sum += top->beep; 
+        sum += top->beep * 3 + top->music * 1 * (use_music ? 1 : 0);   // effects at 3 units, each music voice at 1
         cnt++;
         if ((i + 1) * SAMPLES_PER_FRAME / CLOCKS_PER_FRAME > i * SAMPLES_PER_FRAME / CLOCKS_PER_FRAME) {
-            float x = (float)sum / cnt;              // 0..1 average of the beep line
+            float x = (float)sum / (cnt * 6.f);      // 0..1: effects (3) + three music voices (3)
             float y = x - x1 + 0.995f * y1;
             x1 = x; 
             y1 = y;
@@ -79,11 +84,6 @@ static void reset() {
     tick();
 }
 
-static uint32_t shade(uint8_t v) { 
-    uint32_t g = v * 17; 
-    return 0xFF000000u | g << 16 | g << 8 | g; 
-}
-
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     top = new Vtop;
@@ -106,6 +106,9 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--level2") && i + 1 < argc) {
             level2 = atoi(argv[++i]) & 3;
         }
+        else if (!strcmp(argv[i], "--nomusic")) {
+            use_music = false;
+        }
         else if (!strcmp(argv[i], "--mute")) {
             mute = true;
         }
@@ -126,6 +129,7 @@ int main(int argc, char** argv) {
 
     top->p1_up = top->p1_down = top->p2_up = top->p2_down = 0;
     top->p1_smash = top->p2_smash = 0;
+    top->music_en = 1;
     // opponents live in ai_paddle.v
     top->ai1_en = ai1; 
     top->ai2_en = ai2;
@@ -166,7 +170,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); 
         return 1; 
     }
-    SDL_Window*   win = SDL_CreateWindow("pong", W * SCALE, H * SCALE, 0);
+    SDL_Window*   win = SDL_CreateWindow("pong", ui::WIN_W, ui::WIN_H, 0);
     SDL_Renderer* ren = win ? SDL_CreateRenderer(win, nullptr) : nullptr;
     if (!win || !ren) { 
         fprintf(stderr, "SDL window/renderer: %s\n", SDL_GetError()); 
@@ -189,9 +193,55 @@ int main(int argc, char** argv) {
         }
     }
     SDL_SetRenderVSync(ren, 1);
-    SDL_SetRenderLogicalPresentation(ren, W, H, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-    SDL_Texture*  tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, W, H);
+    SDL_SetRenderLogicalPresentation(ren, ui::WIN_W, ui::WIN_H, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    SDL_Texture*  tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, ui::WIN_W, ui::WIN_H);
     SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
+
+    // game flow: title (cpu vs cpu attract demo behind it) -> menus -> countdown -> play <-> pause -> game over
+    // the verilog only gets clocked while the game is live, so pausing freezes the soundtrack in place too
+    ui::View v;
+    static uint32_t px[ui::WIN_W * ui::WIN_H];
+    int mode = 0, level = 1;                       // mode 0 = 1 player, 1 = 2 players, 2 = cpu vs cpu
+    int count_frames = 0;
+
+    auto set_players = [&](bool a1, bool a2, int l1, int l2) {
+        top->ai1_en = a1; top->ai2_en = a2; top->ai1_diff = l1; top->ai2_diff = l2;
+        v.ai1 = a1; v.ai2 = a2; v.lvl1 = l1; v.lvl2 = l2;
+    };
+    auto go_title = [&]() {
+        set_players(true, true, 1, 1);
+        reset();
+        v.screen = ui::S_TITLE; v.sel = 0;
+    };
+    auto start_game = [&]() {
+        if (mode == 0) set_players(false, true, 0, level);
+        else if (mode == 1) set_players(false, false, 0, 0);
+        else set_players(true, true, level, level);
+        reset();
+        run_frame();                               // draw one frame so the countdown has a field behind it
+        v.screen = ui::S_COUNT; v.count = 3; count_frames = 180;
+    };
+    auto pick = [&]() {                            // enter / space on a menu row
+        switch (v.screen) {
+        case ui::S_TITLE:
+            if (v.sel == 3) return false;
+            mode = v.sel;
+            if (mode == 1) start_game(); else { v.screen = ui::S_DIFF; v.sel = level; }
+            break;
+        case ui::S_DIFF: level = v.sel; start_game(); break;
+        case ui::S_PAUSE:
+            if (v.sel == 0) v.screen = ui::S_PLAY;
+            else if (v.sel == 1) start_game();
+            else go_title();
+            break;
+        case ui::S_OVER:
+            if (v.sel == 0) start_game(); else go_title();
+            break;
+        default: break;
+        }
+        return true;
+    };
+    go_title();
 
     bool running = true;
     while (running) {
@@ -201,44 +251,72 @@ int main(int argc, char** argv) {
             if (e.type == SDL_EVENT_QUIT) {
                 running = false;
             }
-            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_ESCAPE) {
-                running = false;
-            }
-            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_M) {
+            if (e.type != SDL_EVENT_KEY_DOWN) continue;
+            SDL_Scancode sc = e.key.scancode;
+            int rows = ui::menu_count(v.screen);
+            bool in_game = v.screen == ui::S_PLAY || v.screen == ui::S_COUNT;
+            if (sc == SDL_SCANCODE_M) {
                 muted = !muted;
+                v.muted = muted;
             }
-            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_R) {
-                reset();
+            if (rows > 0) {
+                if (sc == SDL_SCANCODE_UP || (sc == SDL_SCANCODE_W)) v.sel = (v.sel + rows - 1) % rows;
+                if (sc == SDL_SCANCODE_DOWN || (sc == SDL_SCANCODE_S)) v.sel = (v.sel + 1) % rows;
+                if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER || sc == SDL_SCANCODE_SPACE) {
+                    if (!pick()) running = false;
+                }
             }
+            if (sc == SDL_SCANCODE_ESCAPE) {
+                switch (v.screen) {
+                case ui::S_TITLE: running = false; break;
+                case ui::S_DIFF: case ui::S_COUNT: case ui::S_OVER: go_title(); break;
+                case ui::S_PLAY: v.screen = ui::S_PAUSE; v.sel = 0; break;
+                case ui::S_PAUSE: v.screen = ui::S_PLAY; break;
+                }
+            }
+            if (sc == SDL_SCANCODE_P) {
+                if (v.screen == ui::S_PLAY) { v.screen = ui::S_PAUSE; v.sel = 0; }
+                else if (v.screen == ui::S_PAUSE) v.screen = ui::S_PLAY;
+            }
+            if (sc == SDL_SCANCODE_R && (in_game || v.screen == ui::S_PAUSE)) start_game();
         }
+
+        // inputs only matter while a game is live; in menus the cpu-vs-cpu attract demo runs on its own
         const bool* k = SDL_GetKeyboardState(nullptr);
-        top->p1_up = k[SDL_SCANCODE_W];
-        top->p1_down = k[SDL_SCANCODE_S];
-        top->p2_up = k[SDL_SCANCODE_UP]; 
-        top->p2_down = k[SDL_SCANCODE_DOWN];
-        top->p1_smash = k[SDL_SCANCODE_D];          // smash: D for P1, Left arrow for P2
-        top->p2_smash = k[SDL_SCANCODE_LEFT];
+        bool live = v.screen == ui::S_PLAY;
+        bool one_p = (mode == 0);
+        top->p1_up = live && (k[SDL_SCANCODE_W] || (one_p && k[SDL_SCANCODE_UP]));
+        top->p1_down = live && (k[SDL_SCANCODE_S] || (one_p && k[SDL_SCANCODE_DOWN]));
+        top->p1_smash = live && (k[SDL_SCANCODE_D] || k[SDL_SCANCODE_SPACE] || (one_p && k[SDL_SCANCODE_LEFT]));
+        top->p2_up = live && k[SDL_SCANCODE_UP];
+        top->p2_down = live && k[SDL_SCANCODE_DOWN];
+        top->p2_smash = live && k[SDL_SCANCODE_LEFT];
 
-        run_frame();
-        // keep latency bounded: if more than ~3 frames are already queued, drop this frame's audio
-        if (astream && !muted && SDL_GetAudioStreamQueued(astream) < 3 * SAMPLES_PER_FRAME * 2) {
-            SDL_PutAudioStreamData(astream, audio_buf, SAMPLES_PER_FRAME * (int)sizeof(int16_t));
-        }
-
-        uint32_t px[W * H];
-        for (int y = 0; y < H; y++) {
-            for (int x = 0; x < W; x++) {
-                px[y * W + x] = shade(fb[y][x]);
+        bool step = v.screen == ui::S_PLAY || v.screen == ui::S_TITLE || v.screen == ui::S_DIFF || v.screen == ui::S_OVER;
+        top->music_en = v.screen != ui::S_OVER;
+        if (step) {
+            run_frame();
+            // keep latency bounded: if more than ~3 frames are already queued, drop this frame's audio
+            if (astream && !muted && SDL_GetAudioStreamQueued(astream) < 3 * SAMPLES_PER_FRAME * 2) {
+                SDL_PutAudioStreamData(astream, audio_buf, SAMPLES_PER_FRAME * (int)sizeof(int16_t));
             }
         }
-        SDL_UpdateTexture(tex, nullptr, px, W * 4);
+        if (v.screen == ui::S_COUNT && --count_frames <= 0) v.screen = ui::S_PLAY;
+        if (v.screen == ui::S_COUNT) v.count = (count_frames + 59) / 60;
+        if (top->game_over) {
+            if (v.screen == ui::S_PLAY) { v.screen = ui::S_OVER; v.sel = 0; v.winner = top->p1_score > top->p2_score ? 1 : 2; }
+            else if (v.screen == ui::S_TITLE || v.screen == ui::S_DIFF) reset();      // attract demo finished, start another
+        }
+
+        v.s1 = top->p1_score; v.s2 = top->p2_score;
+        v.m1 = top->p1_meter; v.m2 = top->p2_meter;
+        v.armed1 = top->p1_armed; v.armed2 = top->p2_armed;
+        v.frame++;
+        ui::render(px, fb, v);
+        SDL_UpdateTexture(tex, nullptr, px, ui::WIN_W * 4);
         SDL_RenderClear(ren); 
         SDL_RenderTexture(ren, tex, nullptr, nullptr); 
         SDL_RenderPresent(ren);
-
-        char title[96];
-        snprintf(title, sizeof title, "pong  %d - %d%s", top->p1_score, top->p2_score, top->game_over ? "  GAME OVER (R to restart)" : "");
-        SDL_SetWindowTitle(win, title);
 
         Uint64 dt = SDL_GetTicks() - t0;
         if (dt < 16) SDL_Delay((Uint32)(16 - dt));          // ~60 fps
